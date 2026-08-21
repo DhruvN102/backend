@@ -73,7 +73,7 @@ def _should_run_scheduler() -> bool:
     return os.getenv("VERCEL") != "1"
 
 
-def _is_production(settings) -> bool:
+def _is_production(app_settings) -> bool:
     """Single source of truth for whether the app is running in production.
 
     Checks the ENVIRONMENT/ENV process env vars first, then falls back to the
@@ -84,7 +84,7 @@ def _is_production(settings) -> bool:
         return True
     if os.getenv("ENV", "").strip().lower() == "production":
         return True
-    return (settings.ENVIRONMENT or "").strip().lower() == "production"
+    return (app_settings.ENVIRONMENT or "").strip().lower() == "production"
 
 
 @app.on_event("startup")
@@ -450,7 +450,7 @@ async def root(request: Request):
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(db=Depends(get_db)):
     """Health check endpoint (no rate limit for monitoring)."""
     # Load fresh settings to report current mode
     current_settings = load_settings_from_env()
@@ -458,11 +458,21 @@ async def health_check():
     # Detect production environment
     is_production = _is_production(current_settings)
 
+    if not current_settings.SUPABASE_URL or "dummy" in current_settings.SUPABASE_URL:
+        database_status = "unconfigured"
+    else:
+        try:
+            db.table("supported_sources").select("id").limit(1).execute()
+            database_status = "connected"
+        except Exception as exc:
+            logger.warning(f"Health check database probe failed: {exc}")
+            database_status = "error"
+
     return {
         "status": "healthy",
         "mode": "production" if is_production else "development",
         "test_mode": current_settings.TEST_MODE,
-        "database": "supabase" if current_settings.SUPABASE_URL and "dummy" not in current_settings.SUPABASE_URL else "unconfigured"
+        "database": database_status,
     }
 
 
